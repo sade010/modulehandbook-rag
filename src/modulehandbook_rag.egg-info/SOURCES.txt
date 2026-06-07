@@ -10,6 +10,7 @@ src/modulehandbook_rag/data_loader.py
 src/modulehandbook_rag/dense_retrieval.py
 src/modulehandbook_rag/evaluation.py
 src/modulehandbook_rag/hybrid_retrieval.py
+src/modulehandbook_rag/llm.py
 src/modulehandbook_rag/pdf_extraction.py
 src/modulehandbook_rag/preprocessing.py
 src/modulehandbook_rag/rag.py

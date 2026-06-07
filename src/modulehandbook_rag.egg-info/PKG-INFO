@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: modulehandbook-rag
-Version: 0.1.0
+Version: 0.3.0
 Summary: RAG-style search and question answering over university module handbooks.
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
@@ -9,7 +9,6 @@ Requires-Dist: rank-bm25>=0.2.2
 Requires-Dist: typer>=0.12.0
 Requires-Dist: pydantic>=2.0.0
 Requires-Dist: rich>=13.0.0
-Requires-Dist: pandas>=2.0.0
 Requires-Dist: numpy>=1.24.0
 Provides-Extra: dense
 Requires-Dist: sentence-transformers>=3.0.0; extra == "dense"
@@ -19,112 +18,156 @@ Requires-Dist: pytest>=8.0.0; extra == "dev"
 
 # Modulehandbook RAG
 
-Lokales Seminarprojekt: ein RAG-artiges Such- und Frage-Antwort-System für universitäre Modulhandbücher.
+RAG-style search and question answering over university module handbooks.
 
-## Idee
+This project is designed for the CIS/LMU Suchmaschinen seminar. The core idea is not just "chat with a PDF", but **structure-aware retrieval over semi-structured module handbooks**.
 
-Das System liest Modulhandbücher als PDF, TXT oder Markdown ein, extrahiert Text, erkennt Module wie `P1 Einführung in die Programmierung` oder `WP3 Information Retrieval`, erstellt Chunks und erlaubt Suchanfragen wie:
+## Current scope
 
-- Welche Prüfungsform hat WP3 Information Retrieval?
-- Wie viele ECTS hat P10?
-- Welche Module behandeln maschinelles Lernen?
-- Wer ist für P11 verantwortlich?
+The prototype supports:
 
-Der technische Fokus liegt nicht nur auf „Chat mit PDF“, sondern auf **struktur-aware Retrieval**: Modulhandbücher sind halbstrukturierte Dokumente, daher vergleichen wir naive Chunks mit modulbasierten Chunks.
+- PDF/TXT/MD ingestion
+- text cleaning for German PDF extraction artifacts
+- three chunking modes:
+  - `naive`: fixed-size text windows
+  - `module`: one chunk per module
+  - `field`: one chunk per module field, e.g. ECTS, Inhalte, Prüfungsform
+- BM25 retrieval
+- optional dense retrieval with sentence-transformers
+- optional hybrid retrieval
+- template-based grounded answers with sources
+- small evaluation set for retrieval quality
 
-## Setup
+The included demo PDF is the LMU Bachelor Computerlinguistik module handbook.
+
+## Setup on Windows Git Bash
+
+From the project folder:
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
-pip install -e .
+py -3.12 -m venv .venv
+source .venv/Scripts/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
 ```
 
-Optional für Dense Retrieval:
+For dense and hybrid retrieval:
 
 ```bash
-pip install -e ".[dense]"
+python -m pip install -e .[dense]
 ```
 
-## Daten
+## Create chunks
 
-Lege Modulhandbuch-PDFs in:
+Module-level chunks:
+
+```bash
+python -m modulehandbook_rag.cli ingest data/raw --out data/processed/chunks_module.jsonl --chunking module
+```
+
+Field-level chunks:
+
+```bash
+python -m modulehandbook_rag.cli ingest data/raw --out data/processed/chunks_field.jsonl --chunking field
+```
+
+Naive baseline chunks:
+
+```bash
+python -m modulehandbook_rag.cli ingest data/raw --out data/processed/chunks_naive.jsonl --chunking naive
+```
+
+## Search examples
+
+```bash
+python -m modulehandbook_rag.cli search "Welche Prüfungsform hat WP3 Information Retrieval?" --chunks data/processed/chunks_field.jsonl --top-k 5
+```
+
+```bash
+python -m modulehandbook_rag.cli search "Welche Inhalte behandelt P11 Informationsextraktion?" --chunks data/processed/chunks_field.jsonl --top-k 5
+```
+
+## Ask examples
+
+```bash
+python -m modulehandbook_rag.cli ask "Wie viele ECTS hat WP3 Information Retrieval?" --chunks data/processed/chunks_field.jsonl --top-k 3
+```
+
+```bash
+python -m modulehandbook_rag.cli ask "Welche Prüfungsform hat WP3 Information Retrieval?" --chunks data/processed/chunks_field.jsonl --top-k 3
+```
+
+```bash
+python -m modulehandbook_rag.cli ask "Wer ist modulverantwortlich für P10 Statistische Methoden in der Sprachverarbeitung?" --chunks data/processed/chunks_field.jsonl --top-k 3
+```
+
+## Evaluation
+
+Evaluate BM25 on module chunks:
+
+```bash
+python -m modulehandbook_rag.cli evaluate --chunks data/processed/chunks_module.jsonl --retriever bm25 --top-k 3
+```
+
+Evaluate BM25 on field chunks:
+
+```bash
+python -m modulehandbook_rag.cli evaluate --chunks data/processed/chunks_field.jsonl --retriever bm25 --top-k 3
+```
+
+Stricter evaluation requiring the correct module and field:
+
+```bash
+python -m modulehandbook_rag.cli evaluate --chunks data/processed/chunks_field.jsonl --retriever bm25 --top-k 3 --require-section
+```
+
+## Dense / hybrid retrieval
+
+After installing dense dependencies:
+
+```bash
+python -m modulehandbook_rag.cli search "Welche Module behandeln Informationssuche?" --chunks data/processed/chunks_field.jsonl --retriever dense --top-k 5
+```
+
+```bash
+python -m modulehandbook_rag.cli search "Welche Module behandeln Informationssuche?" --chunks data/processed/chunks_field.jsonl --retriever hybrid --top-k 5
+```
+
+## Seminar framing
+
+A good project framing is:
+
+> We build a RAG-based search and question answering system for university module handbooks. The main research question is whether structure-aware chunking improves retrieval quality compared to naive chunking. We compare naive chunks, module chunks, and field chunks, and then evaluate BM25, dense retrieval, and hybrid retrieval.
+
+
+
+## LLM-RAG mit Ollama
+
+Die normale `ask`-Funktion bleibt als schnelle lokale Fallback-Antwort erhalten. Für echte RAG-Antworten mit einem Sprachmodell gibt es zusätzlich `ask-llm`. Dabei werden zuerst relevante Chunks aus dem Modulhandbuch gesucht und anschließend als Kontext an ein lokales Ollama-Modell übergeben.
+
+Ollama starten und ein Modell laden:
+
+```bash
+ollama pull llama3.1:8b
+```
+
+Dann im Projektordner:
+
+```bash
+python -m modulehandbook_rag.cli ask-llm "Welche Prüfungsform hat WP3 Information Retrieval?" --chunks data/processed/chunks_field.jsonl --top-k 3 --model llama3.1:8b
+```
+
+Für kleinere Rechner kann auch ein kleineres Modell verwendet werden, zum Beispiel:
+
+```bash
+ollama pull mistral
+python -m modulehandbook_rag.cli ask-llm "Wie viele ECTS hat WP3 Information Retrieval?" --chunks data/processed/chunks_field.jsonl --top-k 3 --model mistral
+```
+
+Die RAG-Pipeline ist damit:
 
 ```text
-data/raw/
+Frage → Retrieval über Modulhandbuch-Chunks → Kontextaufbau → LLM-Antwort → Quellenanzeige
 ```
 
-Im Projekt liegt bereits ein Beispiel:
-
-```text
-data/raw/cl_bsc_modulhandbuch.pdf
-```
-
-## Schnellstart
-
-### 1. Daten einlesen und Module extrahieren
-
-```bash
-python -m modulehandbook_rag.cli ingest data/raw --out data/processed/chunks.jsonl --chunking module
-```
-
-### 2. Suchen
-
-```bash
-python -m modulehandbook_rag.cli search "Welche Prüfungsform hat WP3 Information Retrieval?" --chunks data/processed/chunks.jsonl --top-k 5
-```
-
-### 3. Fragen beantworten
-
-```bash
-python -m modulehandbook_rag.cli ask "Wie viele ECTS hat WP3 Information Retrieval?" --chunks data/processed/chunks.jsonl --top-k 5
-```
-
-## CLI-Befehle
-
-```bash
-python -m modulehandbook_rag.cli --help
-```
-
-Befehle:
-
-- `ingest`: liest Dokumente ein und erzeugt Chunks
-- `search`: gibt Top-k Treffer mit Scores aus
-- `ask`: gibt eine einfache quellengestützte Antwort aus
-- `stats`: zeigt Korpusstatistiken
-
-## Projektstruktur
-
-```text
-modulehandbook-rag/
-  data/
-    raw/
-    processed/
-  outputs/
-  src/modulehandbook_rag/
-    cli.py
-    config.py
-    data_loader.py
-    pdf_extraction.py
-    preprocessing.py
-    chunking.py
-    bm25_retrieval.py
-    dense_retrieval.py
-    hybrid_retrieval.py
-    rag.py
-    citations.py
-    evaluation.py
-    schemas.py
-    utils.py
-  tests/
-```
-
-## Präsentationskern
-
-**Forschungsfrage:**
-
-> Verbessert struktur-aware Chunking die Retrieval-Qualität bei RAG-Systemen für Modulhandbücher im Vergleich zu naivem Passage-Chunking?
-
-**Demo:**
-
-Nutzerfrage → Retrieval relevanter Modulabschnitte → Antwort mit Quellen.
+Der Prompt ist bewusst restriktiv formuliert: Das Modell soll nur auf Basis des gefundenen Kontextes antworten und keine Fakten ergänzen, die nicht im Modulhandbuch-Kontext stehen.

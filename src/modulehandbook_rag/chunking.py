@@ -47,6 +47,7 @@ def naive_chunks(docs: list[Document], chunk_size: int = 900, overlap: int = 120
                         source_path=doc.source_path,
                         page_number=doc.page_number,
                         text=chunk_text,
+                        section="naive",
                     )
                 )
             if end == len(text):
@@ -57,10 +58,7 @@ def naive_chunks(docs: list[Document], chunk_size: int = 900, overlap: int = 120
 
 
 def module_chunks(docs: list[Document]) -> list[Chunk]:
-    """Create one chunk per detected module by joining consecutive pages.
-
-    This is intentionally simple and robust for LMU-style module handbooks.
-    """
+    """Create one chunk per detected module by joining consecutive pages."""
     by_source: dict[str, list[Document]] = defaultdict(list)
     for doc in docs:
         by_source[doc.source_path].append(doc)
@@ -99,11 +97,16 @@ def module_chunks(docs: list[Document]) -> list[Chunk]:
 
 
 def field_chunks(docs: list[Document]) -> list[Chunk]:
-    """Split module chunks into smaller field chunks, e.g. Inhalte or Prüfungsform."""
+    """Split module chunks into field chunks such as `Inhalte` or `Form der Modulprüfung`.
+
+    Modulhandbücher are semi-structured documents. Field chunks are usually better
+    for precise questions like ECTS, exam type, responsible lecturer, or recommended
+    semester because the retriever can return the exact field instead of an entire module.
+    """
     modules = module_chunks(docs)
     chunks: list[Chunk] = []
     label_pattern = "|".join(re.escape(label) for label in SECTION_LABELS)
-    section_re = re.compile(rf"({label_pattern})", re.IGNORECASE)
+    section_re = re.compile(rf"\b({label_pattern})\b", re.IGNORECASE)
 
     for module in modules:
         matches = list(section_re.finditer(module.text))
@@ -116,7 +119,7 @@ def field_chunks(docs: list[Document]) -> list[Chunk]:
         for idx, match in enumerate(matches):
             start = match.start()
             end = matches[idx + 1].start() if idx + 1 < len(matches) else len(module.text)
-            section_name = match.group(1)
+            section_name = _canonical_section_name(match.group(1))
             section_text = module.text[start:end].strip()
             if len(section_text) > 20:
                 section_slug = re.sub(r"\W+", "_", section_name.lower()).strip("_")
@@ -139,6 +142,15 @@ def make_chunks(docs: list[Document], mode: str, chunk_size: int = 900, overlap:
     if mode == "field":
         return field_chunks(docs)
     raise ValueError(f"Unknown chunking mode: {mode}")
+
+
+def _canonical_section_name(section: str) -> str:
+    section = section.strip()
+    if section.lower() == "form der modulprufung":
+        return "Form der Modulprüfung"
+    if section.lower() == "voraussetzung fur die vergabe":
+        return "Voraussetzung für die Vergabe"
+    return section
 
 
 def _copy_chunk(base: Chunk, chunk_id: str, text: str, section: str) -> Chunk:

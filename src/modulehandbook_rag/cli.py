@@ -6,14 +6,17 @@ from typing import Literal
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
 
 from .bm25_retrieval import BM25Retriever
 from .chunking import make_chunks
 from .citations import format_result
 from .data_loader import load_documents
 from .dense_retrieval import DenseRetriever
+from .evaluation import evaluate_results, load_eval_queries
 from .hybrid_retrieval import HybridRetriever
-from .rag import answer_from_results
+from .llm import LLMError, OllamaClient
+from .rag import answer_from_results, llm_answer_from_results
 from .utils import read_jsonl, write_jsonl
 
 app = typer.Typer(help="RAG-style search over university module handbooks.")
@@ -41,10 +44,14 @@ def stats(
 ) -> None:
     chunk_list = read_jsonl(chunks)
     modules = sorted({c.module_code for c in chunk_list if c.module_code})
+    sections = sorted({c.section for c in chunk_list if c.section})
     console.print(f"Chunks: {len(chunk_list)}")
     console.print(f"Detected modules: {len(modules)}")
     if modules:
         console.print(", ".join(modules))
+    console.print(f"Sections: {len(sections)}")
+    if sections:
+        console.print(", ".join(sections[:30]))
 
 
 @app.command()
@@ -73,6 +80,57 @@ def ask(
     results = retr.search(query, top_k=top_k)
     answer = answer_from_results(query, results)
     console.print(Panel(answer, title="Antwort"))
+
+
+@app.command("ask-llm")
+def ask_llm(
+    query: str = typer.Argument(..., help="Question."),
+    chunks: Path = typer.Option(Path("data/processed/chunks.jsonl"), help="Chunks JSONL path."),
+    retriever: Literal["bm25", "dense", "hybrid"] = typer.Option("bm25", help="Retriever type."),
+    top_k: int = typer.Option(3, help="Number of context chunks."),
+    model: str = typer.Option("llama3.1:8b", help="Ollama model name."),
+    ollama_url: str = typer.Option("http://localhost:11434", help="Ollama base URL."),
+    temperature: float = typer.Option(0.0, help="LLM temperature."),
+) -> None:
+    """Ask a question and generate a grounded LLM answer with Ollama."""
+    chunk_list = read_jsonl(chunks)
+    retr = _make_retriever(retriever, chunk_list)
+    results = retr.search(query, top_k=top_k)
+    client = OllamaClient(model=model, base_url=ollama_url)
+    try:
+        answer = llm_answer_from_results(
+            query,
+            results,
+            lambda prompt: client.generate(prompt, temperature=temperature),
+        )
+    except LLMError as exc:
+        console.print(Panel(str(exc), title="LLM-Fehler", style="red"))
+        raise typer.Exit(code=1) from exc
+    console.print(Panel(answer, title=f"LLM-RAG Antwort ({model})"))
+
+
+@app.command("evaluate")
+def evaluate_command(
+    eval_file: Path = typer.Option(Path("data/eval/demo_queries.jsonl"), help="JSONL/CSV file with evaluation queries."),
+    chunks: Path = typer.Option(Path("data/processed/chunks.jsonl"), help="Chunks JSONL path."),
+    retriever: Literal["bm25", "dense", "hybrid"] = typer.Option("bm25", help="Retriever type."),
+    top_k: int = typer.Option(5, help="Evaluation cutoff."),
+    require_section: bool = typer.Option(False, help="Require both correct module and correct field/section."),
+) -> None:
+    eval_queries = load_eval_queries(eval_file)
+    chunk_list = read_jsonl(chunks)
+    retr = _make_retriever(retriever, chunk_list)
+    metrics = evaluate_results(eval_queries, retr.search, chunk_list, k=top_k, require_section=require_section)
+
+    table = Table(title=f"Evaluation: {retriever} on {chunks}")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    for key, value in metrics.items():
+        if key == "queries":
+            table.add_row(key, str(int(value)))
+        else:
+            table.add_row(key, f"{value:.3f}")
+    console.print(table)
 
 
 def _make_retriever(name: str, chunks):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from .bm25_retrieval import chunk_index_text
 from .schemas import Chunk, SearchResult
 
 
@@ -19,7 +20,7 @@ class DenseRetriever:
 
         self.chunks = chunks
         self.model = SentenceTransformer(model_name)
-        self.embeddings = self.model.encode([c.text for c in chunks], normalize_embeddings=True)
+        self.embeddings = self.model.encode([chunk_index_text(c) for c in chunks], normalize_embeddings=True)
 
     def search(self, query: str, top_k: int = 5) -> list[SearchResult]:
         q = self.model.encode([query], normalize_embeddings=True)[0]
