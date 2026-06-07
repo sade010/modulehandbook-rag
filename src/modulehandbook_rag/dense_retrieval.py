@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+import numpy as np
+
+from .schemas import Chunk, SearchResult
+
+
+class DenseRetriever:
+    """Dense retrieval with sentence-transformers.
+
+    This dependency is optional. Install with: pip install -e .[dense]
+    """
+
+    def __init__(self, chunks: list[Chunk], model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"):
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise ImportError("Install dense dependencies with: pip install -e .[dense]") from exc
+
+        self.chunks = chunks
+        self.model = SentenceTransformer(model_name)
+        self.embeddings = self.model.encode([c.text for c in chunks], normalize_embeddings=True)
+
+    def search(self, query: str, top_k: int = 5) -> list[SearchResult]:
+        q = self.model.encode([query], normalize_embeddings=True)[0]
+        scores = np.dot(self.embeddings, q)
+        ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:top_k]
+        return [
+            SearchResult(chunk=self.chunks[i], score=float(score), rank=rank + 1)
+            for rank, (i, score) in enumerate(ranked)
+        ]
